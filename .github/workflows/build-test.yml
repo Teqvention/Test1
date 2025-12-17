@@ -1,0 +1,63 @@
+name: Build Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        id: install
+        run: npm ci
+        continue-on-error: true
+
+      - name: Build
+        id: build
+        if: steps.install.outcome == 'success'
+        run: npm run build 2>&1 | tee build.log
+        continue-on-error: true
+
+      - name: Notify Success
+        if: steps.install.outcome == 'success' && steps.build.outcome == 'success'
+        run: |
+          curl -X POST "https://n8n.teqvention.de/webhook/ce86127f-3563-4a19-a723-10f473a31830" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "status": "success",
+            "repo": "${{ github.repository }}",
+            "branch": "${{ github.ref_name }}",
+            "commit": "${{ github.sha }}",
+            "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          }'
+
+      - name: Notify Failure
+        if: steps.install.outcome == 'failure' || steps.build.outcome == 'failure'
+        run: |
+          # Capture error from build log if exists
+          if [ -f build.log ]; then
+            ERROR_OUTPUT=$(tail -100 build.log | jq -Rs .)
+          else
+            ERROR_OUTPUT="\"Install or build failed. Check workflow run for details.\""
+          fi
+          
+          curl -X POST "https://n8n.teqvention.de/webhook/ce86127f-3563-4a19-a723-10f473a31830" \
+          -H "Content-Type: application/json" \
+          -d "{
+            \"status\": \"failure\",
+            \"repo\": \"${{ github.repository }}\",
+            \"branch\": \"${{ github.ref_name }}\",
+            \"commit\": \"${{ github.sha }}\",
+            \"run_url\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\",
+            \"failed_step\": \"${{ steps.install.outcome == 'failure' && 'install' || 'build' }}\",
+            \"error\": $ERROR_OUTPUT
+          }"
